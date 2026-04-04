@@ -9,7 +9,7 @@ endif
 CC  = $(TARGET_COMPILE)gcc
 STRIP = $(TARGET_COMPILE)strip
 
-INCLUDE_DIRS := . include patch/include linux/include linux/arch/arm64/include linux/tools/arch/arm64/include
+INCLUDE_DIRS := include patch/include linux/include linux/arch/arm64/include linux/tools/arch/arm64/include
 INCLUDE_FLAGS := $(foreach dir,$(INCLUDE_DIRS),-I$(KP_DIR)/kernel/$(dir))
 
 CFLAGS_BASE := -Wall -Wextra -Wno-unused-parameter -fno-builtin -std=gnu11 -g
@@ -20,12 +20,12 @@ release: fshide_release.kpm
 
 debug: fshide_debug.kpm
 
-fshide_release.kpm: fshide.c
+fshide_release.kpm: src/fshide.c
 	$(CC) $(CFLAGS_BASE) -O2 $(INCLUDE_FLAGS) -c -o fshide_release.o $<
 	$(CC) -r -o $@ fshide_release.o
 	$(STRIP) --strip-unneeded $@
 
-fshide_debug.kpm: fshide.c
+fshide_debug.kpm: src/fshide.c
 	$(CC) $(CFLAGS_BASE) -O0 -DFSHIDE_DEBUG $(INCLUDE_FLAGS) -c -o fshide_debug.o $<
 	$(CC) -r -o $@ fshide_debug.o
 
