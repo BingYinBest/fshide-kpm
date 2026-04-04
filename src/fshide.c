@@ -270,16 +270,12 @@ static int ensure_loaded(void)
 	return 0;
 }
 
-/* Resolve an fd to its filesystem path.
- * Method 1: readlinkat(fd, "") — works for most fs types
- * Method 2: /proc/self/fd/<fd> — universal fallback for procfs etc. */
 static int resolve_fd_path(long fd, char *buf, int buflen)
 {
 	void __user *upath, *ubuf;
 	long n;
 	char self_fd_path[48];
 
-	/* Method 1: readlinkat on the fd itself */
 	upath = copy_to_user_stack("", sizeof(""));
 	if (upath && (long)upath >= 0) {
 		memset(buf, 0, buflen);
@@ -295,7 +291,6 @@ static int resolve_fd_path(long fd, char *buf, int buflen)
 		}
 	}
 
-	/* Method 2: read /proc/self/fd/<fd> as fallback */
 	if ((int)fd < 0 || (int)fd >= 1000000) return -1;
 	n = scnprintf(self_fd_path, sizeof(self_fd_path), "/proc/self/fd/%ld", fd);
 	if (n <= 0 || n >= (long)sizeof(self_fd_path)) return -1;
@@ -442,8 +437,6 @@ static void after_getdents64(hook_fargs3_t *args, void *udata)
 
 	dir_ptr = (void __user *)args->local.data0;
 	if (!dir_ptr) {
-		/* Cannot resolve directory path (should not happen with
-		   /proc/self/fd/ fallback), skip filtering safely */
 		DBG("after_getdents64: no dir_path, SKIP");
 		return;
 	}
