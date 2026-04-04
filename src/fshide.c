@@ -13,7 +13,7 @@
 #include <accctl.h>
 
 KPM_NAME("fshide");
-KPM_VERSION("0.1.0");
+KPM_VERSION("0.2.0");
 KPM_LICENSE("AGPLv3");
 KPM_AUTHOR("时汐安");
 KPM_DESCRIPTION("Hide specified files and directories from userspace");
@@ -524,7 +524,7 @@ static long fshide_init(const char *args, const char *event, void *__user reserv
 	(void)reserved;
 
 
-	DBG("INIT v0.1.0 kpver=0x%x kver=0x%x event='%s'",
+	DBG("INIT v0.2.0 kpver=0x%x kver=0x%x event='%s'",
 	    kpver, kver, event ? event : "(null)");
 
 	do_memdup_user = (void *)kallsyms_lookup_name("memdup_user");
