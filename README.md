@@ -29,12 +29,12 @@ skip_origin = 1, ret = -ENOENT
 ```
 
 ```
-用户空间 ls /proc/
+用户空间 ls /data/local/tmp/
     ↓ getdents64 syscall
 [before 回调] 通过 readlinkat + /proc/self/fd/<fd> 双策略解析目录 fd 路径
 [after 回调] 从用户空间拷贝 dirent 缓冲区 → 遍历条目 → 移除匹配项 → 压缩写回
     ↓
-ls 输出中不包含被隐藏的 PID 或文件名
+ls 输出中不包含被隐藏的文件或目录名
 ```
 
 ### 配置文件
@@ -49,9 +49,6 @@ ls 输出中不包含被隐藏的 PID 或文件名
 # 仅对特定 UID 隐藏
 /dev/scene uid:10344
 /dev/cpuset/scene-daemon uid:10344
-
-# 隐藏进程（通过 /proc/PID）
-/proc/1757
 ```
 
 ## 使用方法
