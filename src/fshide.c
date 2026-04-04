@@ -75,7 +75,7 @@ static void clear_all(void)
 	hide_count = 0;
 }
 
-static int find_path(const char *path)
+static int find_path(const char *path, uid_t uid, int has_uid)
 {
 	int i;
 	if (!path || !*path || path[0] != '/') {
@@ -83,12 +83,19 @@ static int find_path(const char *path)
 		return -1;
 	}
 	for (i = 0; i < hide_count; i++) {
-		if (hide_list[i].active && !strcmp(hide_list[i].path, path)) {
-			DBG("find_path: found '%s' at index %d", path, i);
+		if (!hide_list[i].active) continue;
+		if (strcmp(hide_list[i].path, path) != 0) continue;
+		if (!has_uid && !hide_list[i].has_uid) {
+			DBG("find_path: found global '%s' at index %d", path, i);
+			return i;
+		}
+		if (has_uid && hide_list[i].has_uid && hide_list[i].uid == uid) {
+			DBG("find_path: found '%s' uid=%d at index %d", path, uid, i);
 			return i;
 		}
 	}
-	DBG("find_path: '%s' not found in %d entries", path, hide_count);
+	DBG("find_path: '%s'%s not found in %d entries",
+	    path, has_uid ? " uid=%d" : "", has_uid ? (int)uid : 0, hide_count);
 	return -1;
 }
 
@@ -99,7 +106,7 @@ static int add_path_with_uid(const char *path, uid_t uid, int has_uid)
 		DBG("add_path: FULL (%d/%d) dropping '%s'", hide_count, MAX_HIDE_ENTRIES, path);
 		return -ENOSPC;
 	}
-	if (find_path(path) >= 0) {
+	if (find_path(path, uid, has_uid) >= 0) {
 		DBG("add_path: duplicate '%s', skip", path);
 		return 0;
 	}
@@ -159,12 +166,15 @@ static void parse_config_line(const char *line)
 	while (*uid_part == ' ' || *uid_part == '\t') uid_part++;
 	DBG("parse_line: path='%s' uid_part='%s'", path_buf, uid_part);
 	if (!strncasecmp(uid_part, "uid:", 4)) {
-		uid_t uid;
-		if (parse_uid_str(uid_part + 4, &uid) < 0) {
-			DBG("parse_line: bad uid in '%s'", line);
-			return;
+		const char *up = uid_part + 4;
+		while (*up) {
+			uid_t uid;
+			const char *uend = up;
+			while (*uend && *uend != ',') uend++;
+			if (parse_uid_str(up, &uid) >= 0)
+				add_path_with_uid(path_buf, uid, 1);
+			up = (*uend == ',') ? uend + 1 : uend;
 		}
-		add_path_with_uid(path_buf, uid, 1);
 	} else {
 		add_path_with_uid(path_buf, 0, 0);
 	}
