@@ -1,6 +1,6 @@
 # fshide-kpm
 
-基于 [KernelPatch](https://github.com/bmax121/KernelPatch) 的 KPM 模块，用于隐藏指定的文件和目录。
+基于 [KernelPatch](https://github.com/bmax121/KernelPatch) 的 KPM，用于隐藏指定的文件和目录。
 
 ## 技术原理
 
@@ -58,7 +58,7 @@ ls 输出中不包含被隐藏的文件或目录名
 ## 使用方法
 
 ```bash
-# 加载模块（自动读取配置文件）
+# 加载（自动读取配置文件）
 sc_kpm_load key ./fshide_release.kpm ""
 
 # 运行时重新加载配置
@@ -70,7 +70,7 @@ sc_kpm_control key "fshide" "list"
 # 查看状态
 sc_kpm_control key "fshide" "status"
 
-# 卸载模块
+# 卸载
 sc_kpm_unload key "fshide"
 ```
 
