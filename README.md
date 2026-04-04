@@ -49,6 +49,9 @@ ls 输出中不包含被隐藏的文件或目录名
 # 仅对特定 UID 隐藏
 /dev/scene uid:10344
 /dev/cpuset/scene-daemon uid:10344
+
+# 单路径多 UID（逗号分隔）
+/dev/scene uid:10188,11451
 ```
 
 ## 注意事项
