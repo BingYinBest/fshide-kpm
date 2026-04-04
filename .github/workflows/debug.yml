@@ -1,4 +1,4 @@
-name: Build
+name: Debug Build
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
     paths:
       - 'fshide.c'
       - 'Makefile'
-      - '.github/workflows/build.yml'
+      - '.github/workflows/debug.yml'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout fshide-kpm
+      - name: Checkout
         uses: actions/checkout@v5
 
       - name: Checkout KernelPatch (headers only)
@@ -48,20 +48,13 @@ jobs:
           tar xf toolchain.tar.xz
           rm toolchain.tar.xz
 
-      - name: Build release & debug
+      - name: Build debug
         env:
           TARGET_COMPILE: ${{ github.workspace }}/${{ env.TC_DIR }}/bin/aarch64-none-elf-
           KP_DIR: ${{ github.workspace }}/KernelPatch
-        run: make clean && make debug && make release
+        run: make clean && make debug
 
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fshide-release
-          path: fshide_release.kpm
-          retention-days: 30
-
-      - name: Upload debug artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: fshide-debug
