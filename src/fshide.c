@@ -11,7 +11,6 @@
 #include <linux/string.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
-#include <linux/ctype.h>
 #include <stdint.h>
 #include <uapi/asm-generic/unistd.h>
 #include <syscall.h>
@@ -79,6 +78,11 @@ static void *(*do_memdup_user)(const void __user *, size_t) = NULL;
 static void (*do_kfree)(const void *) = NULL;
 
 /* ---------- Utility Functions ---------- */
+static inline int isspace_k(char c)
+{
+    return (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f');
+}
+
 static void normalize_path(char *path)
 {
     int len;
@@ -188,7 +192,7 @@ static void parse_config_line(char *line)
     if (comment) *comment = '\0';
 
     /* Trim leading whitespace */
-    while (isspace(*p)) p++;
+    while (isspace_k(*p)) p++;
     if (!*p) {
         DBG("parse_line: skip empty/comment");
         return;
@@ -200,7 +204,7 @@ static void parse_config_line(char *line)
     }
 
     path_end = p;
-    while (*path_end && !isspace(*path_end))
+    while (*path_end && !isspace_k(*path_end))
         path_end++;
 
     plen = (int)(path_end - p);
@@ -210,7 +214,7 @@ static void parse_config_line(char *line)
     normalize_path(path_buf);
 
     uid_part = path_end;
-    while (isspace(*uid_part)) uid_part++;
+    while (isspace_k(*uid_part)) uid_part++;
 
     DBG("parse_line: path='%s' uid_part='%s'", path_buf, uid_part);
 
@@ -283,15 +287,18 @@ static int load_config(void)
     clear_all();
     p = kbuf;
     while (*p) {
-        char *line_end = strpbrk(p, "\n\r");
-        if (!line_end) {
+        char *line_end = p;
+        while (*line_end && *line_end != '\n' && *line_end != '\r')
+            line_end++;
+        if (*line_end) {
+            *line_end = '\0';
+            parse_config_line(p);
+            p = line_end + 1;
+            while (*p == '\n' || *p == '\r') p++;
+        } else {
             parse_config_line(p);
             break;
         }
-        *line_end = '\0';
-        parse_config_line(p);
-        p = line_end + 1;
-        while (*p == '\n' || *p == '\r') p++;
     }
 
     DBG("load_config: done entries=%d", hide_count);
