@@ -1,39 +1,48 @@
 /*
- * fshide_vfs.c - Advanced file hiding via VFS filldir64 hooking
- *
- * 通过 Ftrace 劫持 filldir64，在 VFS 层实现高效文件隐藏。
- * 配置方式与原 fshide 兼容。
+ * fshide.c - VFS filldir64 hook for file hiding (KernelPatch KPM)
  */
 
-#include <linux/version.h>
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/slab.h>
+#include <compiler.h>
+#include <kpmodule.h>
+#include <common.h>
+#include <linux/printk.h>
 #include <linux/string.h>
+#include <linux/kernel.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
 #include <linux/kallsyms.h>
 #include <linux/ftrace.h>
 #include <linux/kprobes.h>
-#include <linux/syscalls.h>
-#include <asm/unistd.h>
+#include <stdint.h>
+#include <uapi/asm-generic/unistd.h>
+#include <syscall.h>
+#include <kputils.h>
+#include <asm/current.h>
 #include <asm/ptrace.h>
+#include <accctl.h>
 
-#include "kpmodule.h"   // KernelPatch 框架头文件
-#include "common.h"
-#include "syscall.h"
+KPM_NAME("fshide_vfs");
+KPM_VERSION("0.3.0");
+KPM_LICENSE("AGPLv3");
+KPM_AUTHOR("Advanced Hide");
+KPM_DESCRIPTION("VFS filldir64 hook for file hiding");
 
-/* ===== 配置与常量 ===== */
-#define MODULE_NAME        "fshide_vfs"
-#define MODULE_VERSION     "0.3.0"
+/* ===== 调试开关 ===== */
+#ifdef FSHIDE_DEBUG
+#define LOG_TAG            "[fshide_vfs]"
+#define DBG(fmt, ...)      pr_info(LOG_TAG" [DBG] " fmt "\n", ##__VA_ARGS__)
+#else
+#define DBG(fmt, ...)      ((void)0)
+#endif
 
+/* ===== 配置常量 ===== */
 #define CONFIG_PATH        "/data/adb/fshide"
 #define MAX_HIDE_ENTRIES   128
 #define MAX_PATH_LEN       512
 
-/* ===== 隐藏条目结构 ===== */
 struct hide_entry {
     char path[MAX_PATH_LEN];
     uid_t uid;
@@ -45,28 +54,16 @@ static struct hide_entry hide_list[MAX_HIDE_ENTRIES];
 static int hide_count;
 static DEFINE_MUTEX(hide_lock);
 
-/* ===== 白名单 UID (0 = root) ===== */
-static inline bool is_whitelisted_uid(uid_t uid)
-{
-    // 在此处添加你的白名单逻辑，例如只允许特定 root 子进程看到隐藏文件
-    // 目前默认：非 root (uid != 0) 会触发隐藏；root 看到全部。
-    return (uid == 0);
-}
-
 /* ===== Ftrace 相关 ===== */
 static struct ftrace_ops fops;
-static unsigned long target_ip;                  // filldir64 的地址
-static asmlinkage int (*orig_filldir64)(void *, const char *, int, loff_t, u64, unsigned int);
+static unsigned long target_ip;                  // filldir64 地址
+static void *return_thunk;                       // ret 指令地址
 
-/* 用于快速返回的汇编指令段 (retq) */
-static void *return_thunk;
-
-/* ===== 辅助函数：符号解析 (处理未导出符号) ===== */
+/* ===== 符号解析（处理未导出符号） ===== */
 static unsigned long lookup_name(const char *name)
 {
     unsigned long addr = kallsyms_lookup_name(name);
     if (!addr) {
-        // 如果 kallsyms 没有，尝试用 kprobe 解析
         struct kprobe kp = { .symbol_name = name };
         if (register_kprobe(&kp) == 0) {
             addr = (unsigned long)kp.addr;
@@ -76,7 +73,13 @@ static unsigned long lookup_name(const char *name)
     return addr;
 }
 
-/* ===== 配置文件加载 (与原版兼容) ===== */
+/* ===== 白名单检查（当前仅允许 root 看到全部） ===== */
+static inline bool is_whitelisted_uid(uid_t uid)
+{
+    return (uid == 0);
+}
+
+/* ===== 配置文件解析（与原版兼容） ===== */
 static void clear_all_entries(void)
 {
     mutex_lock(&hide_lock);
@@ -113,7 +116,7 @@ static int add_entry(const char *path, uid_t uid, bool has_uid)
     mutex_lock(&hide_lock);
     if (find_entry(path, uid, has_uid) >= 0) {
         mutex_unlock(&hide_lock);
-        return 0; // 已存在
+        return 0;
     }
 
     strncpy(hide_list[hide_count].path, path, MAX_PATH_LEN - 1);
@@ -147,7 +150,6 @@ static void parse_config_line(char *line)
     char path_buf[MAX_PATH_LEN];
     int plen;
 
-    // 跳过空白
     while (*p == ' ' || *p == '\t') p++;
     if (*p == '#' || *p == '\0' || *p == '\n')
         return;
@@ -163,7 +165,6 @@ static void parse_config_line(char *line)
     if (plen >= MAX_PATH_LEN) plen = MAX_PATH_LEN - 1;
     memcpy(path_buf, p, plen);
     path_buf[plen] = '\0';
-    // 去掉末尾多余的 '/'
     while (plen > 1 && path_buf[plen-1] == '/')
         path_buf[--plen] = '\0';
 
@@ -195,8 +196,7 @@ static int load_config(void)
 
     f = filp_open(CONFIG_PATH, O_RDONLY, 0);
     if (IS_ERR(f)) {
-        pr_err(MODULE_NAME ": failed to open %s, error %ld\n",
-               CONFIG_PATH, PTR_ERR(f));
+        pr_err(LOG_TAG " failed to open %s\n", CONFIG_PATH);
         return PTR_ERR(f);
     }
 
@@ -227,11 +227,11 @@ static int load_config(void)
     }
 
     kfree(buf);
-    pr_info(MODULE_NAME ": loaded %d entries\n", hide_count);
+    DBG("config loaded: %d entries", hide_count);
     return 0;
 }
 
-/* ===== VFS 层隐藏核心：判断路径是否应隐藏 ===== */
+/* ===== 判断目录项是否应隐藏 ===== */
 static bool should_hide_dentry(const char *name, int namelen)
 {
     struct task_struct *task = current;
@@ -242,18 +242,15 @@ static bool should_hide_dentry(const char *name, int namelen)
     bool hide = false;
     int i;
 
-    // 白名单 root 可见全部
     if (is_whitelisted_uid(uid))
         return false;
 
-    // 获取当前目录路径 (近似，仅用于日志)
     get_fs_pwd(current->fs, &pwd);
     cwd = dentry_path_raw(pwd.dentry, full_path, MAX_PATH_LEN);
     path_put(&pwd);
     if (IS_ERR(cwd))
         cwd = full_path;
 
-    // 构造完整路径用于匹配
     snprintf(full_path, MAX_PATH_LEN, "%s/%.*s", cwd, namelen, name);
 
     mutex_lock(&hide_lock);
@@ -269,53 +266,41 @@ static bool should_hide_dentry(const char *name, int namelen)
     }
     mutex_unlock(&hide_lock);
 
-    if (hide) {
-        pr_debug(MODULE_NAME ": hiding '%s' from uid %d\n", full_path, uid);
-    }
     return hide;
 }
 
-/* ===== Ftrace 钩子函数 ===== */
+/* ===== Ftrace 钩子 ===== */
 static void notrace filldir64_hook(unsigned long ip, unsigned long parent_ip,
                                    struct ftrace_ops *ops, struct pt_regs *regs)
 {
     const char *name;
     int namlen;
 
-    // 从寄存器提取参数 (x86_64 调用约定)
-    // filldir64(void *buf, const char *name, int namlen, loff_t offset, u64 ino, unsigned int type)
-    // RDI = buf, RSI = name, RDX = namlen
+    // x86_64 调用约定：RDI=buf, RSI=name, RDX=namlen
     name = (const char *)regs->si;
     namlen = (int)regs->dx;
 
-    // 空名字或特殊条目直接放行
     if (!name || namlen <= 0)
         return;
 
-    // 检查是否需要隐藏
     if (should_hide_dentry(name, namlen)) {
-        // 跳过该条目：修改 IP 到返回地址 thunk，直接返回
         regs->ip = (unsigned long)return_thunk;
     }
-    // 否则 regs->ip 保持不变，ftrace 会继续执行原始函数
 }
 
-/* ===== 准备 return_thunk (用于快速返回) ===== */
-static int __init setup_return_thunk(void)
+/* ===== 定位 ret 指令地址 ===== */
+static int setup_return_thunk(void)
 {
-    // 简单起见，我们劫持一个内核中无用的函数结尾作为 retq 指令地址
-    // 这里用 kallsyms 找一个简单的函数，取其结尾 ret 指令
     unsigned long addr = lookup_name("mutex_unlock");
     if (!addr)
         return -ENOENT;
 
-    // 搜索 ret 指令 (0xC3)
     unsigned char *p = (unsigned char *)addr;
     int i;
     for (i = 0; i < 64; i++) {
         if (p[i] == 0xC3) {
             return_thunk = (void *)(addr + i);
-            pr_info(MODULE_NAME ": return_thunk at %p\n", return_thunk);
+            DBG("return_thunk at %p", return_thunk);
             return 0;
         }
     }
@@ -323,83 +308,58 @@ static int __init setup_return_thunk(void)
 }
 
 /* ===== 注册 Ftrace 钩子 ===== */
-static int __init register_filldir64_hook(void)
+static int register_filldir64_hook(void)
 {
     int ret;
 
-    // 1. 查找 filldir64 地址
     target_ip = lookup_name("filldir64");
     if (!target_ip) {
-        pr_err(MODULE_NAME ": filldir64 not found\n");
+        pr_err(LOG_TAG " filldir64 not found\n");
         return -ENOENT;
     }
-    pr_info(MODULE_NAME ": filldir64 at 0x%lx\n", target_ip);
+    DBG("filldir64 at 0x%lx", target_ip);
 
-    // 2. 准备返回 thunk
     ret = setup_return_thunk();
-    if (ret) {
-        pr_err(MODULE_NAME ": failed to setup return_thunk\n");
+    if (ret)
         return ret;
-    }
 
-    // 3. 保存原始函数地址 (用于非 ftrace 调用场景)
-    orig_filldir64 = (void *)target_ip;
-
-    // 4. 初始化 ftrace_ops
     fops.func = filldir64_hook;
     fops.flags = FTRACE_OPS_FL_SAVE_REGS | FTRACE_OPS_FL_IPMODIFY;
 
-    // 5. 设置过滤器
     ret = ftrace_set_filter_ip(&fops, target_ip, 0, 0);
     if (ret) {
-        pr_err(MODULE_NAME ": ftrace_set_filter_ip failed: %d\n", ret);
+        pr_err(LOG_TAG " ftrace_set_filter_ip failed: %d\n", ret);
         return ret;
     }
 
-    // 6. 注册函数
     ret = register_ftrace_function(&fops);
     if (ret) {
-        pr_err(MODULE_NAME ": register_ftrace_function failed: %d\n", ret);
+        pr_err(LOG_TAG " register_ftrace_function failed: %d\n", ret);
         ftrace_set_filter_ip(&fops, target_ip, 1, 0);
         return ret;
     }
 
-    pr_info(MODULE_NAME ": filldir64 hook installed\n");
+    pr_info(LOG_TAG " VFS hook installed\n");
     return 0;
 }
 
-static void __exit unregister_filldir64_hook(void)
+static void unregister_filldir64_hook(void)
 {
     unregister_ftrace_function(&fops);
     ftrace_set_filter_ip(&fops, target_ip, 1, 0);
-    pr_info(MODULE_NAME ": filldir64 hook removed\n");
+    pr_info(LOG_TAG " VFS hook removed\n");
 }
 
-/* ===== 保留原始 syscall 钩子 (兼容/备用) ===== */
-// 此处可选择保留原 fshide 中的 syscall hook 作为备份，
-// 但为了简洁，这里省略。你可以按需添加。
-
-/* ===== KernelPatch 接口 ===== */
-static long fshide_vfs_init(const char *args, const char *event, void __user *reserved)
+/* ===== KPM 接口 ===== */
+static long fshide_init(const char *args, const char *event, void __user *reserved)
 {
-    int ret;
+    DBG("init v0.3.0");
 
-    pr_info(MODULE_NAME ": init v" MODULE_VERSION "\n");
-
-    ret = load_config();
-    if (ret && ret != -ENOENT)
-        pr_warn(MODULE_NAME ": config load failed, hiding disabled\n");
-
-    ret = register_filldir64_hook();
-    if (ret) {
-        pr_err(MODULE_NAME ": failed to install VFS hook\n");
-        return ret;
-    }
-
-    return 0;
+    load_config();
+    return register_filldir64_hook();
 }
 
-static long fshide_vfs_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
+static long fshide_ctl0(const char *ctl_args, char *__user out_msg, int outlen)
 {
     char *resp;
     int pos = 0, i;
@@ -448,21 +408,14 @@ out:
     return 0;
 }
 
-static long fshide_vfs_exit(void *__user reserved)
+static long fshide_exit(void *__user reserved)
 {
     unregister_filldir64_hook();
     clear_all_entries();
-    pr_info(MODULE_NAME ": exited\n");
+    DBG("exited");
     return 0;
 }
 
-/* ===== 模块注册 ===== */
-KPM_NAME(MODULE_NAME);
-KPM_VERSION(MODULE_VERSION);
-KPM_LICENSE("GPL");
-KPM_AUTHOR("Advanced Hide");
-KPM_DESCRIPTION("VFS filldir64 hook for file hiding");
-
-KPM_INIT(fshide_vfs_init);
-KPM_CTL0(fshide_vfs_ctl0);
-KPM_EXIT(fshide_vfs_exit);
+KPM_INIT(fshide_init);
+KPM_CTL0(fshide_ctl0);
+KPM_EXIT(fshide_exit);
