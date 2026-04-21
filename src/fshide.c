@@ -2,6 +2,8 @@
  * fshide.c - Hide files and directories from userspace (KernelPatch module)
  * Optimized version with improved path normalization, fd resolution,
  * config parsing and reduced code duplication.
+ * 
+ * Fix: Correct d_off in filtered getdents64 results to avoid directory corruption.
  */
 
 #include <compiler.h>
@@ -19,7 +21,7 @@
 #include <accctl.h>
 
 KPM_NAME("fshide");
-KPM_VERSION("0.2.1");
+KPM_VERSION("0.2.2");
 KPM_LICENSE("AGPLv3");
 KPM_AUTHOR("时汐安");
 KPM_DESCRIPTION("Hide specified files and directories from userspace");
@@ -516,6 +518,20 @@ static void after_getdents64(hook_fargs3_t *args, void *udata)
         pos += reclen;
     }
 
+    /* Fix d_off fields for the remaining entries to maintain correct directory offset chain */
+    if (new_total > 0 && new_total < total) {
+        struct linux_dirent64 *d;
+        long offset = 0;
+        pos = 0;
+        while (pos < new_total) {
+            d = (struct linux_dirent64 *)(kbuf + pos);
+            /* d_off should be the offset of the next entry (or 0 for last) */
+            d->d_off = (pos + d->d_reclen < new_total) ? (pos + d->d_reclen) : 0;
+            pos += d->d_reclen;
+        }
+        DBG("after_getdents64: fixed d_off fields for filtered entries");
+    }
+
     if (new_total < total && new_total > 0) {
         compat_copy_to_user(ubuf, kbuf, (int)new_total);
         args->ret = (uint64_t)new_total;
@@ -552,7 +568,7 @@ static long fshide_init(const char *args, const char *event, void *__user reserv
     hook_err_t err;
     (void)args; (void)event; (void)reserved;
 
-    DBG("INIT v0.2.1 kpver=0x%x kver=0x%x event='%s'",
+    DBG("INIT v0.2.2 kpver=0x%x kver=0x%x event='%s'",
         kpver, kver, event ? event : "(null)");
 
     do_memdup_user = (void *)kallsyms_lookup_name("memdup_user");
